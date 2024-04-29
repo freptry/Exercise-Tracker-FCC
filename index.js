@@ -14,7 +14,7 @@ const userSchema = new Schema({
 const User = mongoose.model('User', userSchema);
 
 const exSchema = new Schema({
-  user_id: { type: String, required: true },
+  user_id: { type: Schema.Types.ObjectId, ref: 'User', required: true }, // Update to reference User model
   description: String,
   duration: Number,
   date: Date
@@ -24,42 +24,43 @@ const Exercise = mongoose.model('Exercise', exSchema);
 
 app.use(cors());
 app.use(express.static('public'));
+
 app.use(express.urlencoded({ extended: true }));
 app.get('/', (req, res) => {
   res.sendFile(__dirname + '/views/index.html')
 });
 
 app.get('/api/users', async (req, res) => {
-  const users = await User.find({}).select("_id username");
-  if(!users){
-    res.send("NO users");
-  }else{
+  try {
+    const users = await User.find({}, '_id username'); // Update to select only _id and username
     res.json(users);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
-})
+});
 
 app.post('/api/users', async (req, res) => {
-  const userObj = new User({
-    username: req.body.username
-  })
+  const { username } = req.body; // Destructure username from request body
   try {
-    const savedUser = await userObj.save();
+    const newUser = new User({ username });
+    const savedUser = await newUser.save();
     res.json(savedUser);
   } catch (err) {
-    console.log(err);
+    console.error(err);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
 app.post('/api/users/:_id/exercises', async (req, res) => {
-  const id = req.params._id;
+  const { _id } = req.params;
   const { description, duration, date } = req.body;
 
-  try{
-    const user = await User.findById(id)
-    if (!user){
+  try {
+    const user = await User.findById(_id);
+    if (!user) {
       res.send("could not find user");
-    }else{
+    } else {
       const exObj = new Exercise({
         user_id: user._id,
         description,
@@ -69,53 +70,48 @@ app.post('/api/users/:_id/exercises', async (req, res) => {
       const exercise = await exObj.save();
       res.json({
         _id: user._id,
-        user: user.username,
+        username: user.username,
         description: exercise.description,
         duration: exercise.duration,
-        date: new Date(exercise.date).toDateString()
-      })
+        date: exercise.date.toDateString(),
+      });
     }
-  }catch(err){
+  } catch (err) {
     console.log(err);
     res.send("error saving ex")
   }
 });
 
 app.get('/api/users/:_id/logs', async (req, res) => {
-  const {from, to,limit} = req.query;
-  const id = req.params._id;
-  const user = await User.findById(id);
-  if(!user){
-    res.send("could not find user");
-    return;
+  const { from, to, limit } = req.query;
+  const { _id } = req.params;
+  try {
+    const user = await User.findById(_id);
+    if (!user) {
+      return res.status(404).send('User not found');
+    }
+    const query = { user_id: _id };
+    if (from || to) {
+      query.date = {};
+      if (from) query.date.$gte = new Date(from);
+      if (to) query.date.$lte = new Date(to);
+    }
+    const exercises = await Exercise.find(query).limit(parseInt(limit) || 0); // Limit to specified number or default to 0
+    const log = exercises.map(exercise => ({
+      description: exercise.description,
+      duration: exercise.duration,
+      date: exercise.date.toDateString()
+    }));
+    res.json({
+      _id: user._id,
+      username: user.username,
+      count: exercises.length,
+      log
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
-  let dateObj = {};
-  if (from){
-    dateObj[$gte] = new Date(from);
-  }
-  if(to){
-    dateObj[$lte] = new Date(to);
-  }
-  let filter = {
-    user_id: id
-  }
-  if(from || to){
-    filter.date = dateObj;
-  }
-  const exercises =  await Exercise.find(filter).limit(+limit ?? 500);
-
-  const log = exercises.map(e => ({
-    description: e.description,
-    duration: e.duration,
-    date: e.date.toDateString()  
-  }));
-
-  res.json({
-    username: user.username,
-    count: exercises.length,
-    _id: user._id,
-    log
-  });
 });
 
 const listener = app.listen(process.env.PORT || 3000, () => {
